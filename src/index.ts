@@ -3,7 +3,6 @@ import path from "path";
 import os from "os";
 
 import neo4j, { Session } from "neo4j-driver";
-import { Z_PARTIAL_FLUSH } from "zlib";
 
 const FIELD_SEPERATOR = ",";
 const EOL = os.EOL;
@@ -13,13 +12,22 @@ const ADDITIONAL_PROPERTIES = {
 };
 const DEFAULT_LABEL = "RAW_PROPERTY_SALE_INFO";
 
-const addNodeIfNotPresent = async(session: Session, data: any, addProcessedFlag: boolean = false) => {
+const addNodeIfNotPresent = async(session: Session,
+                                  data: any,
+                                  addProcessedFlag: boolean = false,
+                                  labelToUseForNewEntities: string,
+                                  uniqueIdentifierFieldName?: string) => {
 
     const clauses: string[] = [];
     const keys = Object.keys(data);
-    keys.forEach((key, index) => {
-        clauses.push(`node.${key} = ${JSON.stringify(data[key])}`)
-    })
+    if (uniqueIdentifierFieldName && data.hasOwnProperty(uniqueIdentifierFieldName)) {
+        clauses.push(`node.${uniqueIdentifierFieldName} = ${JSON.stringify(data[uniqueIdentifierFieldName])}`);
+    } else {
+        keys.forEach((key) => {
+            clauses.push(`node.${key} = ${JSON.stringify(data[key])}`)
+        });
+    }
+
     const joinedClause = clauses.join(" AND ");
     const query = `\
         MATCH (node:${DEFAULT_LABEL}) \
@@ -31,7 +39,7 @@ const addNodeIfNotPresent = async(session: Session, data: any, addProcessedFlag:
             data.processed = false;
         }
         const props: string[] = [];
-        keys.forEach((key, index) => {
+        keys.forEach((key) => {
             props.push(`${key}: ${JSON.stringify(data[key])}`);
         });
         const joinedProps = props.join(", ");
@@ -39,14 +47,10 @@ const addNodeIfNotPresent = async(session: Session, data: any, addProcessedFlag:
         const inertQuery = `\
         CREATE (node:${DEFAULT_LABEL}{${joinedProps}}) \
         RETURN node`;
-        const insertResponse = await session.run(inertQuery);
-        console.log("record inserted", insertResponse);
-    } else {
-        console.log("skipping item because it exists", data);
-    }
-    console.dir(result, {
-        depth: 5
-    });
+        await session.run(inertQuery);
+    } // else {
+    //     console.log("skipping item because it exists", data);
+    // }
 }
 
 const csvToJSON = (targetContents: string) => {
@@ -84,6 +88,8 @@ const run = async () => {
     const pathIndex = process.argv.indexOf("--path") + 1;
     const subPropertyIndex = process.argv.indexOf("--subProperty") + 1;
     const addProcessedFlag = process.argv.indexOf("--addProcessedFlag") !== -1;
+    const uniqueIdentifierFieldIndex = process.argv.indexOf("--uniqueIdentifierField") + 1;
+    const newEntityLabelIndex = process.argv.indexOf("--newEntityLabel") + 1;
 
     if (typeIndex === 0) {
         throw new Error("--type was not provided!");
@@ -100,7 +106,11 @@ const run = async () => {
         throw new Error("--type must be either 'csv' or 'json'");
     }
 
+    const uniqueIdentifierFieldName = uniqueIdentifierFieldIndex > 0 ? process.argv[uniqueIdentifierFieldIndex] : undefined;
+
     const pathContents = fs.readdirSync(process.argv[pathIndex]).filter((f) => f.toLowerCase().endsWith(fileType === "csv" ? ".csv" : ".json"));
+
+    const newEntityLabel = newEntityLabelIndex > 0 ? process.argv[newEntityLabelIndex] : DEFAULT_LABEL;
 
     const driver = neo4j.driver("bolt://localhost:7687", neo4j.auth.basic("", ""), {
 
@@ -110,10 +120,11 @@ const run = async () => {
 
     for (const file of pathContents) {
         const target = path.join(targetPath, file);
+        const parseLabel = `Parsing contents from file ${target}`;
+        console.time(parseLabel);
         const targetContents = fs.readFileSync(target, {
             encoding: "utf8"
         });
-
         let data: any[];
 
         if  (fileType === "csv") {
@@ -124,6 +135,9 @@ const run = async () => {
                 data = data.map((item) => item[process.argv[subPropertyIndex]]);
             }
         }
+        console.timeEnd(parseLabel);
+        const graphLabel = `${data.length} records processed from ${target}`;
+        console.time(graphLabel);
 
         if (ADDITIONAL_PROPERTIES) {
             data = data.map((item) => {
@@ -135,8 +149,10 @@ const run = async () => {
         }
 
         for (const item of data) {
-            await addNodeIfNotPresent(session, item, addProcessedFlag);
+            await addNodeIfNotPresent(session, item, addProcessedFlag, newEntityLabel, uniqueIdentifierFieldName);
         }
+
+        console.timeEnd(graphLabel);
     }
 };
 

@@ -19,7 +19,9 @@
                 "json",
                 "--subProperty",
                 "simplifiedData",
-                "--addProcessedFlag"
+                "--addProcessedFlag",
+                "--uniqueIdentifierField",
+                "property_id"
             ],
             "outFiles": [
                 "${workspaceFolder}/**/*.js"

@@ -23,15 +23,20 @@ const ADDITIONAL_PROPERTIES = {
     source: SOURCE,
 };
 const DEFAULT_LABEL = "RAW_PROPERTY_SALE_INFO";
-const addNodeIfNotPresent = (session, data, addProcessedFlag = false) => __awaiter(void 0, void 0, void 0, function* () {
+const addNodeIfNotPresent = (session, data, addProcessedFlag = false, labelToUseForNewEntities, uniqueIdentifierFieldName) => __awaiter(void 0, void 0, void 0, function* () {
     const clauses = [];
     const keys = Object.keys(data);
-    keys.forEach((key, index) => {
-        clauses.push(`node.${key} = ${JSON.stringify(data[key])}`);
-    });
+    if (uniqueIdentifierFieldName && data.hasOwnProperty(uniqueIdentifierFieldName)) {
+        clauses.push(`node.${uniqueIdentifierFieldName} = ${JSON.stringify(data[uniqueIdentifierFieldName])}`);
+    }
+    else {
+        keys.forEach((key) => {
+            clauses.push(`node.${key} = ${JSON.stringify(data[key])}`);
+        });
+    }
     const joinedClause = clauses.join(" AND ");
     const query = `\
-        MATCH (node:RAW_PROPERTY_DATA) \
+        MATCH (node:${DEFAULT_LABEL}) \
         WHERE ${joinedClause} \
         RETURN node`;
     const result = yield session.run(query);
@@ -40,7 +45,7 @@ const addNodeIfNotPresent = (session, data, addProcessedFlag = false) => __await
             data.processed = false;
         }
         const props = [];
-        keys.forEach((key, index) => {
+        keys.forEach((key) => {
             props.push(`${key}: ${JSON.stringify(data[key])}`);
         });
         const joinedProps = props.join(", ");
@@ -48,15 +53,10 @@ const addNodeIfNotPresent = (session, data, addProcessedFlag = false) => __await
         const inertQuery = `\
         CREATE (node:${DEFAULT_LABEL}{${joinedProps}}) \
         RETURN node`;
-        const insertResponse = yield session.run(inertQuery);
-        console.log("record inserted", insertResponse);
-    }
-    else {
-        console.log("skipping item because it exists", data);
-    }
-    console.dir(result, {
-        depth: 5
-    });
+        yield session.run(inertQuery);
+    } // else {
+    //     console.log("skipping item because it exists", data);
+    // }
 });
 const csvToJSON = (targetContents) => {
     const data = [];
@@ -92,6 +92,8 @@ const run = () => __awaiter(void 0, void 0, void 0, function* () {
     const pathIndex = process.argv.indexOf("--path") + 1;
     const subPropertyIndex = process.argv.indexOf("--subProperty") + 1;
     const addProcessedFlag = process.argv.indexOf("--addProcessedFlag") !== -1;
+    const uniqueIdentifierFieldIndex = process.argv.indexOf("--uniqueIdentifierField") + 1;
+    const newEntityLabelIndex = process.argv.indexOf("--newEntityLabel") + 1;
     if (typeIndex === 0) {
         throw new Error("--type was not provided!");
     }
@@ -103,11 +105,15 @@ const run = () => __awaiter(void 0, void 0, void 0, function* () {
     if (fileType !== "csv" && fileType !== "json") {
         throw new Error("--type must be either 'csv' or 'json'");
     }
+    const uniqueIdentifierFieldName = uniqueIdentifierFieldIndex > 0 ? process.argv[uniqueIdentifierFieldIndex] : undefined;
     const pathContents = fs_1.default.readdirSync(process.argv[pathIndex]).filter((f) => f.toLowerCase().endsWith(fileType === "csv" ? ".csv" : ".json"));
+    const newEntityLabel = newEntityLabelIndex > 0 ? process.argv[newEntityLabelIndex] : DEFAULT_LABEL;
     const driver = neo4j_driver_1.default.driver("bolt://localhost:7687", neo4j_driver_1.default.auth.basic("", ""), {});
     const session = driver.session();
     for (const file of pathContents) {
         const target = path_1.default.join(targetPath, file);
+        const parseLabel = `Parsing contents from file ${target}`;
+        console.time(parseLabel);
         const targetContents = fs_1.default.readFileSync(target, {
             encoding: "utf8"
         });
@@ -121,14 +127,18 @@ const run = () => __awaiter(void 0, void 0, void 0, function* () {
                 data = data.map((item) => item[process.argv[subPropertyIndex]]);
             }
         }
+        console.timeEnd(parseLabel);
+        const graphLabel = `${data.length} records processed from ${target}`;
+        console.time(graphLabel);
         if (ADDITIONAL_PROPERTIES) {
             data = data.map((item) => {
                 return Object.assign(Object.assign({}, ADDITIONAL_PROPERTIES), item);
             });
         }
         for (const item of data) {
-            yield addNodeIfNotPresent(session, item, addProcessedFlag);
+            yield addNodeIfNotPresent(session, item, addProcessedFlag, newEntityLabel, uniqueIdentifierFieldName);
         }
+        console.timeEnd(graphLabel);
     }
 });
 run();
