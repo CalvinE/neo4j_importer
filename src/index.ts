@@ -16,7 +16,7 @@ const addNodeIfNotPresent = async(session: Session,
                                   data: any,
                                   addProcessedFlag: boolean = false,
                                   labelToUseForNewEntities: string,
-                                  uniqueIdentifierFieldName?: string) => {
+                                  uniqueIdentifierFieldName?: string): Promise<boolean> => {
 
     const clauses: string[] = [];
     const keys = Object.keys(data);
@@ -47,10 +47,17 @@ const addNodeIfNotPresent = async(session: Session,
         const inertQuery = `\
         CREATE (node:${DEFAULT_LABEL}{${joinedProps}}) \
         RETURN node`;
-        await session.run(inertQuery);
+        const insertResult = await session.run(inertQuery);
+        if (insertResult.records.length > 0) {
+            return true;
+        } else {
+            console.log(`failed to insert record...`, insertResult);
+            return false;
+        }
     } // else {
     //     console.log("skipping item because it exists", data);
     // }
+    return false;
 }
 
 const csvToJSON = (targetContents: string) => {
@@ -84,6 +91,7 @@ const csvToJSON = (targetContents: string) => {
 }
 
 const run = async () => {
+    console.time("Time to complete");
     const typeIndex = process.argv.indexOf("--type") + 1;
     const pathIndex = process.argv.indexOf("--path") + 1;
     const subPropertyIndex = process.argv.indexOf("--subProperty") + 1;
@@ -121,6 +129,7 @@ const run = async () => {
     for (const file of pathContents) {
         const target = path.join(targetPath, file);
         const parseLabel = `Parsing contents from file ${target}`;
+        let inserted = 0;
         console.time(parseLabel);
         const targetContents = fs.readFileSync(target, {
             encoding: "utf8"
@@ -149,11 +158,21 @@ const run = async () => {
         }
 
         for (const item of data) {
-            await addNodeIfNotPresent(session, item, addProcessedFlag, newEntityLabel, uniqueIdentifierFieldName);
+            const wasInserted = await addNodeIfNotPresent(session, item, addProcessedFlag, newEntityLabel, uniqueIdentifierFieldName);
+            if (wasInserted) {
+                inserted++;
+            }
         }
+        console.log(`${inserted} of ${data.length} records inserted.`)
 
         console.timeEnd(graphLabel);
     }
+
+    await session.close();
+    console.timeEnd("Time to complete");
+    return;
 };
 
-run();
+run().finally(() => {
+    process.exit(0);
+});

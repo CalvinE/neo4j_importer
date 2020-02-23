@@ -53,10 +53,18 @@ const addNodeIfNotPresent = (session, data, addProcessedFlag = false, labelToUse
         const inertQuery = `\
         CREATE (node:${DEFAULT_LABEL}{${joinedProps}}) \
         RETURN node`;
-        yield session.run(inertQuery);
+        const insertResult = yield session.run(inertQuery);
+        if (insertResult.records.length > 0) {
+            return true;
+        }
+        else {
+            console.log(`failed to insert record...`, insertResult);
+            return false;
+        }
     } // else {
     //     console.log("skipping item because it exists", data);
     // }
+    return false;
 });
 const csvToJSON = (targetContents) => {
     const data = [];
@@ -88,6 +96,7 @@ const csvToJSON = (targetContents) => {
     return data;
 };
 const run = () => __awaiter(void 0, void 0, void 0, function* () {
+    console.time("Time to complete");
     const typeIndex = process.argv.indexOf("--type") + 1;
     const pathIndex = process.argv.indexOf("--path") + 1;
     const subPropertyIndex = process.argv.indexOf("--subProperty") + 1;
@@ -113,6 +122,7 @@ const run = () => __awaiter(void 0, void 0, void 0, function* () {
     for (const file of pathContents) {
         const target = path_1.default.join(targetPath, file);
         const parseLabel = `Parsing contents from file ${target}`;
+        let inserted = 0;
         console.time(parseLabel);
         const targetContents = fs_1.default.readFileSync(target, {
             encoding: "utf8"
@@ -136,10 +146,19 @@ const run = () => __awaiter(void 0, void 0, void 0, function* () {
             });
         }
         for (const item of data) {
-            yield addNodeIfNotPresent(session, item, addProcessedFlag, newEntityLabel, uniqueIdentifierFieldName);
+            const wasInserted = yield addNodeIfNotPresent(session, item, addProcessedFlag, newEntityLabel, uniqueIdentifierFieldName);
+            if (wasInserted) {
+                inserted++;
+            }
         }
+        console.log(`${inserted} of ${data.length} records inserted.`);
         console.timeEnd(graphLabel);
     }
+    yield session.close();
+    console.timeEnd("Time to complete");
+    return;
 });
-run();
+run().finally(() => {
+    process.exit(0);
+});
 //# sourceMappingURL=index.js.map
